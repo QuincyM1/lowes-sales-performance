@@ -14,7 +14,7 @@ public class StoreDataFetcher {
 
     private static final String BASE_URL = "https://www.lowes.com/wpd/checkotherstores/5012898687/";
     private static final String URL_SUFFIX = "?itemNumber=4358811&modelId=GL22BLKS1&vendorNumber=108893&maxResults=100&inventorySource=bifrost";
-    private static final String ZIP_CODES_FILE = "/Users/qiyuanma/workspace/SimpleApiFetcher/zipcodes2.txt";
+    private static final String ZIP_CODES_FILE = "/Users/qiyuanma/workspace/SimpleApiFetcher/zipcodes.txt";
     private static final String PRODUCT_NAME = "GL22BLKS1"; // Product name for the output file
     private static final int MIN_QUANTITY_THRESHOLD = 0; // Minimum quantity filter
 
@@ -28,7 +28,8 @@ public class StoreDataFetcher {
             System.out.println("Connected to the database!");
 
             // Fetch the maximum import order from the database
-            int importOrder = getMaxImportOrder(connection) + 1;
+            int importOrder = getNextImportOrder(connection);
+            System.out.println("Starting with import_order: " + importOrder);
 
             // Create dynamic file name
             LocalDateTime today = LocalDateTime.now();
@@ -91,21 +92,25 @@ public class StoreDataFetcher {
     }
 
     // Function to fetch the maximum import_order value from the database
-    private static int getMaxImportOrder(Connection connection) {
-        int maxImportOrder = 0;
+    private static int getNextImportOrder(Connection connection) {
+        int nextImportOrder = 1; // Default to 1 if no records exist
         try {
             String query = "SELECT MAX(import_order) FROM LowesData";
             PreparedStatement statement = connection.prepareStatement(query);
             ResultSet resultSet = statement.executeQuery();
 
             if (resultSet.next()) {
-                maxImportOrder = resultSet.getInt(1); // Fetch the max value
+                int lastImportOrder = resultSet.getInt(1);
+                if (!resultSet.wasNull()) {
+                    nextImportOrder = lastImportOrder + 1;
+                }
             }
-        } catch (Exception e) {
-            System.out.println("Error fetching max import_order: " + e.getMessage());
+        } catch (SQLException e) {
+            System.out.println("Error fetching next import_order: " + e.getMessage());
         }
-        return maxImportOrder;
+        return nextImportOrder;
     }
+
 
     // Function to fetch JSON data from the URL
     private static String fetchJSONData(String urlString) throws IOException {
