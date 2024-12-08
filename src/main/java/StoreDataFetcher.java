@@ -6,6 +6,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.LocalDate;
+
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -15,13 +17,13 @@ public class StoreDataFetcher {
     private static final String BASE_URL = "https://www.lowes.com/wpd/checkotherstores/5012898687/";
     private static final String URL_SUFFIX = "?itemNumber=4358811&modelId=GL22BLKS1&vendorNumber=108893&maxResults=100&inventorySource=bifrost";
     private static final String ZIP_CODES_FILE = "/Users/qiyuanma/workspace/SimpleApiFetcher/zipcodes.txt";
-    private static final String PRODUCT_NAME = "GL22BLKS1"; // Product name for the output file
+    private static final String PRODUCT_NAME = "GL22BLKS1";
     private static final int MIN_QUANTITY_THRESHOLD = 0; // Minimum quantity filter
 
     // Database connection details
-    private static final String DB_URL = "jdbc:mysql://localhost:3306/bs"; // Replace "bs" with your database name
-    private static final String DB_USER = "root"; // Replace with your username
-    private static final String DB_PASSWORD = "Noahmqy4212*"; // Replace with your password
+    private static final String DB_URL = "jdbc:mysql://localhost:3306/bs";
+    private static final String DB_USER = "root";
+    private static final String DB_PASSWORD = "Rootroot1%";
 
     public static void main(String[] args) {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
@@ -83,8 +85,13 @@ public class StoreDataFetcher {
                         }
                     }
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
+                // Insert summary data into VendorData table
+                String vendor = "Lowes";
+                String productId = PRODUCT_NAME;
+                LocalDate todayDate = LocalDate.now();
+                insertVendorData(connection, vendor, productId, importOrder, todayDate);
+
+                System.out.println("Vendor data summary added.");
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -194,9 +201,27 @@ public class StoreDataFetcher {
         }
     }
 
+    public static void insertVendorData(Connection connection, String vendor, String productId, int importOrder, LocalDate date) {
+        String query = "INSERT INTO VendorData (vendor, product_id, `order`, `date`, product_import_order) VALUES (?, ?, ?, ?, ?)";
+        try (PreparedStatement statement = connection.prepareStatement(query)) {
+            statement.setString(1, vendor); // Vendor name (e.g., "Lowes")
+            statement.setString(2, productId); // Product ID (e.g., "GL22BLKS1")
+            statement.setInt(3, importOrder); // Import order number
+            statement.setDate(4, java.sql.Date.valueOf(date)); // Date of import
+            statement.setInt(5, importOrder); // Product import order (same as importOrder)
+            statement.executeUpdate();
+            System.out.println("VendorData table updated with summary for import_order: " + importOrder);
+        } catch (SQLException e) {
+            System.out.println("Error inserting data into VendorData table: " + e.getMessage());
+        }
+    }
+
+
     // Function to insert data into the database
     private static void insertDataToDatabase(HashMap<String, String[]> storeData, Connection connection) {
-        String insertQuery = "INSERT INTO LowesData (product_id, store_name, state, zipcode, qty, sales, import_order, created_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        String insertQuery = "INSERT INTO LowesData (product_id, store_name, state, zipcode, qty, sales, import_order, created_time) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+                "ON DUPLICATE KEY UPDATE qty = VALUES(qty), sales = VALUES(sales), created_time = VALUES(created_time)";
         try (PreparedStatement statement = connection.prepareStatement(insertQuery)) {
             for (String[] values : storeData.values()) {
                 statement.setString(1, values[0]); // product_id
@@ -209,8 +234,9 @@ public class StoreDataFetcher {
                 statement.setString(8, values[7]); // created_time
                 statement.executeUpdate();
             }
-        } catch (Exception e) {
-            System.out.println("Error inserting data into the database: " + e.getMessage());
+        } catch (SQLException e) {
+            System.out.println("Error inserting data into LowesData table: " + e.getMessage());
         }
     }
+
 }

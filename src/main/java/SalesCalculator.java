@@ -4,7 +4,7 @@ public class SalesCalculator {
 
     private static final String DB_URL = "jdbc:mysql://localhost:3306/bs";
     private static final String DB_USER = "root";
-    private static final String DB_PASSWORD = "Noahmqy4212*";
+    private static final String DB_PASSWORD = "Rootroot1%";
 
     // Fixed restocking increment (6 units per case)
     private static final int RESTOCK_INCREMENT = 6;
