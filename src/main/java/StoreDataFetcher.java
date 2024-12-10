@@ -3,11 +3,14 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.sql.*;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDate;
-
+import java.util.Set;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -29,70 +32,61 @@ public class StoreDataFetcher {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
             System.out.println("Connected to the database!");
 
-            // Fetch the maximum import order from the database
             int importOrder = getNextImportOrder(connection);
             System.out.println("Starting with import_order: " + importOrder);
 
-            // Create dynamic file name
+            // Dynamic file name
             LocalDateTime today = LocalDateTime.now();
             String date = today.format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
             String outputFileName = PRODUCT_NAME + "_Lowes_" + date + ".csv";
 
-            File outputFile = new File(outputFileName);
-            if (outputFile.exists()) {
-                System.out.println("Overwriting existing file: " + outputFileName);
-            } else {
-                System.out.println("Creating new file: " + outputFileName);
-            }
+            // Buffer to store all rows
+            List<String[]> dataBuffer = new ArrayList<>();
+            dataBuffer.add(new String[]{"product_id", "store_name", "state", "zipcode", "qty", "sales", "import_order", "created_time"}); // Add headers
 
-            try (FileWriter writer = new FileWriter(outputFileName)) {
-                // Write CSV headers
-                writer.append("product_id,store_name,state,zipcode,qty,sales,import_order,created_time\n");
-                System.out.println("Headers successfully written.");
+            Set<String> uniqueStores = new HashSet<>(); // Set to track processed stores by a unique key (e.g., store ID or name)
 
-                // Read ZIP codes from the plain text file
-                try (BufferedReader zipReader = new BufferedReader(new FileReader(ZIP_CODES_FILE))) {
-                    String line;
+            try (BufferedReader zipReader = new BufferedReader(new FileReader(ZIP_CODES_FILE))) {
+                String line;
 
-                    while ((line = zipReader.readLine()) != null) {
-                        // Split ZIP codes by comma
-                        String[] zipCodes = line.split(",");
-                        for (String zipCode : zipCodes) {
-                            zipCode = zipCode.trim(); // Remove any extra spaces
-                            if (zipCode.isEmpty()) continue; // Skip empty entries
+                while ((line = zipReader.readLine()) != null) {
+                    String[] zipCodes = line.split(",");
+                    for (String zipCode : zipCodes) {
+                        zipCode = zipCode.trim();
+                        if (zipCode.isEmpty()) continue;
 
-                            String requestUrl = BASE_URL + zipCode + URL_SUFFIX; // Construct URL for each ZIP code
-                            try {
-                                String jsonResponse = fetchJSONData(requestUrl);
+                        String requestUrl = BASE_URL + zipCode + URL_SUFFIX;
+                        try {
+                            String jsonResponse = fetchJSONData(requestUrl);
 
-                                // Debug: Print the JSON response
-                                System.out.println("JSON Response: " + jsonResponse);
+                            if (jsonResponse != null) {
+                                HashMap<String, String[]> storeData = parseStoreData(jsonResponse, today, importOrder, uniqueStores);
 
-                                if (jsonResponse != null) {
-                                    // Parse the store data and write it to the CSV file
-                                    HashMap<String, String[]> storeData = parseStoreData(jsonResponse, today, importOrder);
+                                // Buffer rows into dataBuffer
+                                dataBuffer.addAll(storeData.values());
 
-                                    writeDataToCSV(storeData, writer);
-                                    insertDataToDatabase(storeData, connection);
-
-                                    System.out.println("Data for ZIP code " + zipCode + " successfully written to " + outputFileName);
-                                } else {
-                                    System.out.println("Failed to retrieve data for ZIP code " + zipCode);
-                                }
-                            } catch (Exception e) {
-                                System.out.println("Error processing ZIP code " + zipCode + ": " + e.getMessage());
+                                // Insert data into the database
+                                insertDataToDatabase(storeData, connection);
                             }
+                        } catch (Exception e) {
+                            System.out.println("Error processing ZIP code " + zipCode + ": " + e.getMessage());
                         }
                     }
                 }
-                // Insert summary data into VendorData table
-                String vendor = "Lowes";
-                String productId = PRODUCT_NAME;
-                LocalDate todayDate = LocalDate.now();
-                insertVendorData(connection, vendor, productId, importOrder, todayDate);
-
-                System.out.println("Vendor data summary added.");
             }
+
+            // Write all buffered data to the CSV file at once
+            try (FileWriter writer = new FileWriter(outputFileName)) {
+                for (String[] row : dataBuffer) {
+                    writer.append(String.join(",", row)).append("\n");
+                }
+                System.out.println("Data successfully written to " + outputFileName);
+            }
+
+            // Insert summary data into VendorData table
+            insertVendorData(connection, "Lowes", PRODUCT_NAME, importOrder, LocalDate.now());
+            System.out.println("Vendor data summary added.");
+
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -118,7 +112,6 @@ public class StoreDataFetcher {
         return nextImportOrder;
     }
 
-
     // Function to fetch JSON data from the URL
     private static String fetchJSONData(String urlString) throws IOException {
         URL url = new URL(urlString);
@@ -143,7 +136,7 @@ public class StoreDataFetcher {
     }
 
     // Function to parse JSON response and store data in a HashMap, filtering by quantity
-    private static HashMap<String, String[]> parseStoreData(String jsonResponse, LocalDateTime importOrderTime, int importOrder) {
+    private static HashMap<String, String[]> parseStoreData(String jsonResponse, LocalDateTime importOrderTime, int importOrder, Set<String> uniqueStores) {
         HashMap<String, String[]> storeData = new HashMap<>();
         String createdTime = importOrderTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
@@ -154,31 +147,26 @@ public class StoreDataFetcher {
             JSONObject storeObj = storesArray.getJSONObject(i).getJSONObject("store");
             JSONObject inventory = storesArray.getJSONObject(i).getJSONObject("inventory");
 
-            String storeName = storeObj.optString("bisName", "N/A"); // Full store name
+            String storeName = storeObj.optString("bisName", "N/A"); // Use store name as the unique key
             String zipCode = storeObj.optString("zip", ""); // Nullable
             int qty = inventory.optInt("onhandQty", 0);
             int sales = inventory.optInt("sales", 0); // Sales is nullable; default 0
 
-            // Extract state from store_name (e.g., "LOWE'S OF TACOMA, WA")
-            String state = "N/A";
-            if (storeName.contains(",")) {
-                String[] parts = storeName.split(",");
-                if (parts.length > 1) {
-                    state = parts[1].trim();
-                }
-            }
+            // Create a unique store key (store name + zip code)
+            String uniqueKey = storeName + "_" + zipCode;
 
-            // Clean up the storeName by removing the state abbreviation
-            if (storeName.contains(",")) {
-                storeName = storeName.split(",")[0].trim();
+            // Skip if the store is already processed
+            if (uniqueStores.contains(uniqueKey)) {
+                continue;
             }
+            uniqueStores.add(uniqueKey); // Mark store as processed
 
             // Only include stores with onhandQty >= MIN_QUANTITY_THRESHOLD
             if (qty >= MIN_QUANTITY_THRESHOLD) {
                 String[] row = {
                         PRODUCT_NAME,
                         storeName,    // store_name
-                        state,        // state
+                        storeObj.optString("state", "N/A"), // state
                         zipCode,      // zipcode
                         String.valueOf(qty),    // qty
                         String.valueOf(sales),  // sales
@@ -192,30 +180,20 @@ public class StoreDataFetcher {
         return storeData;
     }
 
-    // Function to write the HashMap data to a CSV file
-    private static void writeDataToCSV(HashMap<String, String[]> storeData, FileWriter writer) throws IOException {
-        for (Map.Entry<String, String[]> entry : storeData.entrySet()) {
-            String[] values = entry.getValue();
-            String row = String.join(",", values);
-            writer.append(row).append("\n");
-        }
-    }
-
     public static void insertVendorData(Connection connection, String vendor, String productId, int importOrder, LocalDate date) {
         String query = "INSERT INTO VendorData (vendor, product_id, `order`, `date`, product_import_order) VALUES (?, ?, ?, ?, ?)";
         try (PreparedStatement statement = connection.prepareStatement(query)) {
-            statement.setString(1, vendor); // Vendor name (e.g., "Lowes")
-            statement.setString(2, productId); // Product ID (e.g., "GL22BLKS1")
-            statement.setInt(3, importOrder); // Import order number
-            statement.setDate(4, java.sql.Date.valueOf(date)); // Date of import
-            statement.setInt(5, importOrder); // Product import order (same as importOrder)
+            statement.setString(1, vendor);
+            statement.setString(2, productId);
+            statement.setInt(3, importOrder);
+            statement.setDate(4, java.sql.Date.valueOf(date));
+            statement.setInt(5, importOrder);
             statement.executeUpdate();
             System.out.println("VendorData table updated with summary for import_order: " + importOrder);
         } catch (SQLException e) {
             System.out.println("Error inserting data into VendorData table: " + e.getMessage());
         }
     }
-
 
     // Function to insert data into the database
     private static void insertDataToDatabase(HashMap<String, String[]> storeData, Connection connection) {
@@ -238,5 +216,5 @@ public class StoreDataFetcher {
             System.out.println("Error inserting data into LowesData table: " + e.getMessage());
         }
     }
-
 }
+
